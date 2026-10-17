@@ -69,7 +69,7 @@ jobs:
           echo "PORT=${{ inputs.service-port }}" >> .env.test
           echo "${{ inputs.extra-env }}" >> .env.test
       - name: Build app
-        uses: proops2026-taskmanager/proops2026-cicd-platform/.github/actions/build-app@v3.1
+        uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/build-app@v3.2
         # ^ relative path works when called from same repo OR when reusable workflow + action are in same platform repo
         with:
           node-version: ${{ inputs.runtime-version }}
@@ -79,7 +79,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       - name: Docker build + push
-        uses: proops2026-taskmanager/proops2026-cicd-platform/.github/actions/docker-build-push@v3.1
+        uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/docker-build-push@v3.2
         with:
           image-name: ${{ inputs.project-name }}/${{ inputs.service-name }}
           image-tag: ${{ inputs.image-tag }}
