@@ -57,8 +57,10 @@ runs:
         sarif_file: trivy-image-results.sarif
         category: trivy-image
 
+    # Skipped when the caller already logged in (e.g. aws-actions/amazon-ecr-login with OIDC)
+    # and so passes no static credentials.
     - name: Login to registry
-      if: inputs.push == 'true'
+      if: inputs.push == 'true' && inputs.registry-username != ''
       uses: docker/login-action@v3
       with:
         registry: ${{ inputs.registry }}

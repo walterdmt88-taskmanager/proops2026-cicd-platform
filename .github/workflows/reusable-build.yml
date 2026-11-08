@@ -2,8 +2,18 @@ name: Reusable Build
 on:
   workflow_call:
     inputs:
-      project-name: { type: string, required: true }
       service-name: { type: string, required: true }
+      ecr-repository:
+        description: "ECR repository name, e.g. taskmanager/user-service (created by the service's infra/)"
+        type: string
+        required: true
+      aws-role-arn:
+        description: "IAM role the job assumes through GitHub OIDC to push to ECR"
+        type: string
+        required: true
+      aws-region:
+        type: string
+        required: true
       db-name:
         description: "Postgres DB name for tests. Leave empty if this service has no database."
         type: string
@@ -16,8 +26,6 @@ on:
         description: "Extra lines appended verbatim to .env.test (e.g. JWT_SECRET=..., REDIS_URL=...)"
         type: string
         default: ""
-    secrets:
-      GHCR_PAT: { required: true }
     outputs:
       image-tag:
         description: "The commit SHA used as the image tag"
@@ -30,7 +38,7 @@ jobs:
       image-tag: ${{ steps.set-tag.outputs.tag }}
     permissions:
       contents: read
-      packages: write
+      id-token: write          # lets the job request an OIDC token for AWS
       security-events: write
     services:
       postgres:
@@ -55,15 +63,51 @@ jobs:
           fi
           echo "PORT=${{ inputs.service-port }}" >> .env.test
           echo "${{ inputs.extra-env }}" >> .env.test
-      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/build-app@v3.2
+      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/build-app@v4.0.0
         # ^ must be absolute — relative ./actions paths resolve against the CALLER's
         # checkout (user-service), not this platform repo. Same bug as Day 28.
       - id: set-tag
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/docker-build-push@v3.2
+
+      - name: Configure AWS credentials (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          image-name: ${{ inputs.project-name }}/${{ inputs.service-name }}
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ECR tags are IMMUTABLE: a tag, once pushed, is never overwritten. A re-run of this job
+      # must therefore reuse the image from the first run instead of failing on the push.
+      - name: Check whether this tag already exists in ECR
+        id: tag-check
+        shell: bash
+        env:
+          ECR_REPOSITORY: ${{ inputs.ecr-repository }}
+          IMAGE_TAG: ${{ steps.set-tag.outputs.tag }}
+          AWS_REGION: ${{ inputs.aws-region }}
+        run: |
+          set -euo pipefail
+          rc=0
+          out=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" --region "$AWS_REGION" 2>&1) || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag $IMAGE_TAG already exists in $ECR_REPOSITORY - skipping build and push; deploy will use the image from the first run."
+          elif echo "$out" | grep -q 'ImageNotFoundException'; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            # Anything else (AccessDenied, throttling, network) must not be read as "tag is free".
+            echo "$out" >&2
+            exit 1
+          fi
+
+      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/docker-build-push@v4.0.0
+        if: steps.tag-check.outputs.exists != 'true'
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          image-name: ${{ inputs.ecr-repository }}
           image-tag: ${{ steps.set-tag.outputs.tag }}
           push: "true"
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GHCR_PAT }}

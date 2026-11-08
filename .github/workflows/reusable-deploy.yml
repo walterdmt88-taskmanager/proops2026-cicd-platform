@@ -4,8 +4,18 @@ on:
     inputs:
       image-tag:    { type: string, required: true }
       environment:  { type: string, required: true }
-      project-name: { type: string, required: true }
       service-name: { type: string, required: true }
+      ecr-repository:
+        description: "ECR repository name, e.g. taskmanager/user-service"
+        type: string
+        required: true
+      aws-role-arn:
+        description: "Read-only IAM role the job assumes through GitHub OIDC to pull from ECR"
+        type: string
+        required: true
+      aws-region:
+        type: string
+        required: true
       secret-name:
         description: "Name of the k8s Secret to create for this service. Leave empty if the service has no runtime secrets."
         type: string
@@ -14,13 +24,14 @@ on:
         description: "Raw --from-literal=KEY=VALUE flags for the app secret (CI stub values only)"
         type: string
         default: ""
-    secrets:
-      GHCR_PAT: { required: true }
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write          # OIDC token; sub = repo:<org>/<repo>:environment:<environment>
     steps:
       - uses: actions/checkout@v4
 
@@ -33,12 +44,33 @@ jobs:
       - name: Create namespace
         run: kubectl create namespace ${{ inputs.environment }}
 
-      - name: Create GHCR pull secret
+      # The ECR token lives 12h and is requested here, after the environment's approval gate has
+      # passed (the job does not start before that), so it is always fresh when the kubelet pulls.
+      - name: Configure AWS credentials (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Resolve ECR registry
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Same secret name for every registry, so the manifest never changes when the registry does.
+      - name: Create registry pull secret
+        shell: bash
+        env:
+          NAMESPACE: ${{ inputs.environment }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          AWS_REGION: ${{ inputs.aws-region }}
         run: |
-          kubectl -n ${{ inputs.environment }} create secret docker-registry ghcr-pull-secret \
-            --docker-server=ghcr.io \
-            --docker-username=${{ github.actor }} \
-            --docker-password=${{ secrets.GHCR_PAT }}
+          set -euo pipefail
+          PASSWORD=$(aws ecr get-login-password --region "$AWS_REGION")
+          echo "::add-mask::$PASSWORD"
+          kubectl -n "$NAMESPACE" create secret docker-registry registry-pull-secret \
+            --docker-server="$REGISTRY" \
+            --docker-username=AWS \
+            --docker-password="$PASSWORD"
 
       - name: Create app secrets
         if: inputs.secret-name != ''
@@ -50,10 +82,15 @@ jobs:
         run: kubectl -n ${{ inputs.environment }} apply -f k8s/
 
       - name: Set image + wait
+        shell: bash
+        env:
+          NAMESPACE: ${{ inputs.environment }}
+          SERVICE: ${{ inputs.service-name }}
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr-repository }}:${{ inputs.image-tag }}
         run: |
-          kubectl -n ${{ inputs.environment }} set image deployment/${{ inputs.service-name }} \
-            ${{ inputs.service-name }}=ghcr.io/${{ inputs.project-name }}/${{ inputs.service-name }}:${{ inputs.image-tag }}
-          kubectl -n ${{ inputs.environment }} rollout status deployment/${{ inputs.service-name }} --timeout=180s
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" set image "deployment/$SERVICE" "$SERVICE=$IMAGE"
+          kubectl -n "$NAMESPACE" rollout status "deployment/$SERVICE" --timeout=180s
 
       - name: Verify
         run: |
