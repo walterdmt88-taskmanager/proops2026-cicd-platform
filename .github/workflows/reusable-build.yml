@@ -63,7 +63,7 @@ jobs:
           fi
           echo "PORT=${{ inputs.service-port }}" >> .env.test
           echo "${{ inputs.extra-env }}" >> .env.test
-      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/build-app@v4.0.0
+      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/build-app@v4.0.1
         # ^ must be absolute — relative ./actions paths resolve against the CALLER's
         # checkout (user-service), not this platform repo. Same bug as Day 28.
       - id: set-tag
@@ -104,7 +104,7 @@ jobs:
             exit 1
           fi
 
-      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/docker-build-push@v4.0.0
+      - uses: walterdmt88-taskmanager/proops2026-cicd-platform/.github/actions/docker-build-push@v4.0.1
         if: steps.tag-check.outputs.exists != 'true'
         with:
           registry: ${{ steps.ecr.outputs.registry }}
