@@ -34,6 +34,8 @@ runs:
         exit-code: '1'
         format: sarif
         output: trivy-sca-results.sarif
+        # Without this, format: sarif makes the action ignore `severity` and gate on ALL severities.
+        limit-severities-for-sarif: true
     - name: Upload SCA scan to Security tab
       if: always()
       uses: github/codeql-action/upload-sarif@v3

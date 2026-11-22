@@ -49,6 +49,8 @@ runs:
         exit-code: '1'
         format: sarif
         output: trivy-image-results.sarif
+        # Without this, format: sarif makes the action ignore `severity` and gate on ALL severities.
+        limit-severities-for-sarif: true
 
     - name: Upload image scan to Security tab
       if: always()
